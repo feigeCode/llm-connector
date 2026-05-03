@@ -306,6 +306,10 @@ pub struct Delta {
     /// Thinking (Anthropic key)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+
+    /// Anthropic extended-thinking block signature (streamed via `signature_delta`)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_signature: Option<String>,
 }
 
 impl Delta {
@@ -442,6 +446,7 @@ impl From<ChatResponse> for StreamingResponse {
                             reasoning: None,
                             thought: None,
                             thinking: None,
+                            thinking_signature: None,
                         },
                         finish_reason: choice.finish_reason.clone(),
                         logprobs: choice.logprobs.clone(),

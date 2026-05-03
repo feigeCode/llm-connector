@@ -349,7 +349,9 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thought: Option<String>,
 
-    /// Provider-specific thinking (Anthropic key)
+    /// Provider-specific thinking (Anthropic key). Compatibility aggregate when
+    /// structured [`MessageBlock::Thinking`] entries exist in `content`, those
+    /// blocks are authoritative for Anthropic serialization.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
 }
@@ -445,6 +447,16 @@ impl Message {
             .or(self.reasoning.as_deref())
             .or(self.thought.as_deref())
             .or(self.thinking.as_deref())
+    }
+
+    /// Extended-thinking bodies from structured [`MessageBlock::Thinking`] blocks in order.
+    /// Does not include the [`Message.thinking`] aggregate field.
+    pub fn thinking_blocks_concat(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| block.as_thinking_body())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Extract all text content from message blocks

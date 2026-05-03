@@ -395,6 +395,10 @@ fn parse_ollama_chunk(
             .get("thinking")
             .and_then(|v| v.as_str())
             .map(ToString::to_string),
+        thinking_signature: message
+            .get("thinking_signature")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string),
     };
 
     let done = raw.get("done").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -764,6 +768,7 @@ mod tests {
                     reasoning: None,
                     thought: None,
                     thinking: None,
+                    thinking_signature: None,
                 },
                 finish_reason: None,
                 logprobs: None,

@@ -28,6 +28,17 @@ pub enum MessageBlock {
     /// Text block
     Text { text: String },
 
+    /// Extended-thinking block (Anthropic native shape).
+    ///
+    /// `signature` is an Anthropic-issued continuation credential when present.
+    /// `None` means unsigned or degraded content (for example OpenAI-style reasoning);
+    /// adapters must not invent placeholder signatures.
+    Thinking {
+        thinking: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+
     /// Image block (Anthropic format)
     Image { source: ImageSource },
 
@@ -53,6 +64,22 @@ impl MessageBlock {
     /// ```
     pub fn text(text: impl Into<String>) -> Self {
         Self::Text { text: text.into() }
+    }
+
+    /// Create an Anthropic-style thinking block.
+    pub fn thinking_unsigned(thinking: impl Into<String>) -> Self {
+        Self::Thinking {
+            thinking: thinking.into(),
+            signature: None,
+        }
+    }
+
+    /// Create an Anthropic-style thinking block with a real `signature`.
+    pub fn thinking_signed(thinking: impl Into<String>, signature: impl Into<String>) -> Self {
+        Self::Thinking {
+            thinking: thinking.into(),
+            signature: Some(signature.into()),
+        }
     }
 
     /// Create Base64 Image block (Anthropic format)
@@ -188,6 +215,22 @@ impl MessageBlock {
         }
     }
 
+    /// Thinking body when this block is [`MessageBlock::Thinking`].
+    pub fn as_thinking_body(&self) -> Option<&str> {
+        match self {
+            Self::Thinking { thinking, .. } => Some(thinking),
+            _ => None,
+        }
+    }
+
+    /// Anthropic signature when this block is signed thinking.
+    pub fn thinking_signature(&self) -> Option<&str> {
+        match self {
+            Self::Thinking { signature, .. } => signature.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Extract Base64 encoded image data from the block (if it contains an image)
     ///
     /// Supports both `Image` (Anthropic format) and `ImageUrl` blocks.
@@ -243,6 +286,10 @@ impl MessageBlock {
     /// CheckisifasText block
     pub fn is_text(&self) -> bool {
         matches!(self, Self::Text { .. })
+    }
+
+    pub fn is_thinking(&self) -> bool {
+        matches!(self, Self::Thinking { .. })
     }
 
     /// Check if is image block
@@ -396,6 +443,29 @@ mod tests {
         let json = serde_json::to_string(&block).unwrap();
         assert!(json.contains(r#""type":"image_url""#));
         assert!(json.contains(r#""url":"https://example.com/image.jpg""#));
+    }
+
+    #[test]
+    fn test_thinking_block_serde_unsigned() {
+        let block = MessageBlock::thinking_unsigned("chain");
+        assert!(block.is_thinking());
+        assert_eq!(block.thinking_signature(), None);
+        let json = serde_json::to_string(&block).unwrap();
+        assert_eq!(json, r#"{"type":"thinking","thinking":"chain"}"#);
+    }
+
+    #[test]
+    fn test_thinking_block_serde_signed() {
+        let block = MessageBlock::thinking_signed("chain", "sig_real");
+        assert_eq!(block.thinking_signature(), Some("sig_real"));
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(
+            json.contains(r#""type":"thinking""#)
+                && json.contains(r#""thinking":"chain""#)
+                && json.contains(r#""signature":"sig_real""#)
+        );
+        let back: MessageBlock = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, block);
     }
 
     #[test]

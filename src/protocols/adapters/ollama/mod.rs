@@ -63,7 +63,17 @@ impl Protocol for OllamaProtocol {
                         Role::System => "system".to_string(),
                         Role::Tool => "user".to_string(),
                     },
-                    content: msg.content_as_text(),
+                    content: {
+                        let tb = msg.thinking_blocks_concat();
+                        let body = msg.content_as_text();
+                        if tb.is_empty() {
+                            body
+                        } else if body.is_empty() {
+                            tb
+                        } else {
+                            format!("{tb}\n{body}")
+                        }
+                    },
                     images: msg.content_as_images_base64(),
                 })
                 .collect(),

@@ -355,6 +355,7 @@ fn parse_aliyun_stream_event(
                 reasoning: None,
                 thought: None,
                 thinking: None,
+                thinking_signature: None,
             },
             finish_reason,
             logprobs: None,

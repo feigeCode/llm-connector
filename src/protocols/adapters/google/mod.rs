@@ -360,6 +360,9 @@ impl From<&ChatRequest> for GoogleRequest {
                     .iter()
                     .map(|block| match block {
                         MessageBlock::Text { text } => GooglePart::Text { text: text.clone() },
+                        MessageBlock::Thinking { thinking, .. } => GooglePart::Text {
+                            text: thinking.clone(),
+                        },
                         MessageBlock::Image {
                             source: ImageSource::Base64 { media_type, data },
                         } => GooglePart::InlineData {

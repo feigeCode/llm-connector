@@ -202,6 +202,10 @@ impl Protocol for AnthropicProtocol {
                 "thinking" => {
                     if let Some(thinking) = &block.thinking {
                         thinking_content.push_str(thinking);
+                        message_blocks.push(crate::types::MessageBlock::Thinking {
+                            thinking: thinking.clone(),
+                            signature: block.signature.clone(),
+                        });
                     }
                 }
                 "tool_use" => {
@@ -492,7 +496,7 @@ fn map_generic_tool_to_anthropic(tool: &crate::types::Tool) -> AnthropicToolDefi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AnthropicToolDefinition, Tool};
+    use crate::types::{AnthropicToolDefinition, MessageBlock, Tool};
 
     #[test]
     fn test_anthropic_parsing_with_thinking_and_text() {
@@ -526,14 +530,62 @@ mod tests {
         let result = protocol.parse_response(response_json).unwrap();
 
         assert_eq!(result.content, "Hello there, nice to meet.");
+        assert_eq!(result.choices[0].message.content.len(), 2);
+        match &result.choices[0].message.content[0] {
+            MessageBlock::Thinking { thinking, signature } => {
+                assert_eq!(thinking, "This is a thinking block");
+                assert_eq!(signature.as_deref(), Some("sig_123"));
+            }
+            _ => panic!("expected thinking block"),
+        }
         assert_eq!(
-            result.choices[0].message.content[0].as_text().unwrap(),
+            result.choices[0].message.content[1].as_text().unwrap(),
             "Hello there, nice to meet."
         );
         assert_eq!(
             result.choices[0].message.thinking.as_deref(),
             Some("This is a thinking block")
         );
+    }
+
+    #[test]
+    fn test_anthropic_thinking_signature_round_trip_build_request() {
+        let protocol = AnthropicProtocol::new("test-key");
+        let response_json = r#"
+        {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-3-5-sonnet-20241022",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "step",
+                    "signature": "sig_xyz"
+                },
+                {
+                    "type": "text",
+                    "text": "Hi"
+                }
+            ],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": { "input_tokens": 1, "output_tokens": 2 }
+        }
+        "#;
+        let parsed = protocol.parse_response(response_json).unwrap();
+        let assistant = parsed.choices[0].message.clone();
+
+        let req = ChatRequest::new("claude-3")
+            .add_message(Message::user("ping"))
+            .add_message(assistant);
+        let mapped = protocol.build_request(&req).unwrap();
+        let arr = mapped.messages[1].content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["type"], "thinking");
+        assert_eq!(arr[0]["thinking"], "step");
+        assert_eq!(arr[0]["signature"], "sig_xyz");
+        assert_eq!(arr[1]["text"], "Hi");
     }
 
     #[test]
@@ -564,7 +616,14 @@ mod tests {
         let result = protocol.parse_response(response_json).unwrap();
 
         assert_eq!(result.content, "");
-        assert!(result.choices[0].message.content.is_empty());
+        assert_eq!(result.choices[0].message.content.len(), 1);
+        match &result.choices[0].message.content[0] {
+            MessageBlock::Thinking { thinking, signature } => {
+                assert_eq!(thinking, "Just thinking...");
+                assert_eq!(signature.as_deref(), Some("sig_124"));
+            }
+            _ => panic!("expected thinking block"),
+        }
         assert_eq!(
             result.choices[0].message.thinking.as_deref(),
             Some("Just thinking...")

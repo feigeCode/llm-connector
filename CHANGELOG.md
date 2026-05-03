@@ -1,3 +1,24 @@
+## [1.3.0] - 2026-05-03
+
+### Breaking
+
+- **`MessageBlock`**: added `Thinking { thinking, signature }` for Anthropic extended-thinking blocks. Downstream exhaustive `match`es on `MessageBlock` must handle the new variant.
+
+### Features
+
+- **Anthropic extended thinking**: `parse_response` now preserves `signature` in structured `MessageBlock::Thinking`; `build_request` serializes those blocks back into Anthropic `content` (compat `Message.thinking` aggregate still filled).
+- **OpenAI-compatible requests**: thinking blocks are stripped from serialized `content` and merged into `reasoning_content` so providers do not see unknown `type: "thinking"` parts.
+- **Anthropic SSE**: `interpret_anthropic_event` maps `thinking_delta` and `signature_delta` to `Delta.thinking` and `Delta.thinking_signature`.
+- **Text-only adapters (Ollama, Tencent)**: prepend `thinking` bodies from structured blocks so they are not dropped from prompts.
+
+### Documentation
+
+- Added `docs/ANTHROPIC_THINKING_SIGNATURE.md` (design and implementation scope).
+
+### Notes
+
+- Assistant `thinking` / `tool_use` interleaving is still limited when `tool_calls` are appended after `content` in Anthropic `build_request`; see the new doc.
+
 ## [1.2.1] - 2026-04-29
 
 ### Features

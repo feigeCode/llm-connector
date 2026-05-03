@@ -157,7 +157,17 @@ impl Protocol for TencentNativeProtocol {
                         Role::System => "system".to_string(),
                         _ => "user".to_string(),
                     },
-                    content: m.content_as_text(),
+                    content: {
+                        let tb = m.thinking_blocks_concat();
+                        let body = m.content_as_text();
+                        if tb.is_empty() {
+                            body
+                        } else if body.is_empty() {
+                            tb
+                        } else {
+                            format!("{tb}\n{body}")
+                        }
+                    },
                 })
                 .collect(),
             temperature: request.temperature,
@@ -282,6 +292,7 @@ impl Protocol for TencentNativeProtocol {
                                             reasoning: None,
                                             thought: None,
                                             thinking: None,
+                                            thinking_signature: None,
                                         },
                                         finish_reason,
                                         logprobs: None,

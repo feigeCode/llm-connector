@@ -118,6 +118,56 @@ pub fn interpret_anthropic_event(
                     content: text.to_string(),
                     ..Default::default()
                 }))
+            } else if let Some(thinking) = event
+                .get("delta")
+                .and_then(|d| d.get("thinking"))
+                .and_then(|t| t.as_str())
+            {
+                Ok(Some(StreamingResponse {
+                    id: message_id.to_string(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    model: "anthropic".to_string(),
+                    choices: vec![StreamingChoice {
+                        index: 0,
+                        delta: Delta {
+                            role: Some(Role::Assistant),
+                            thinking: Some(thinking.to_string()),
+                            ..Default::default()
+                        },
+                        finish_reason: None,
+                        logprobs: None,
+                    }],
+                    ..Default::default()
+                }))
+            } else if let Some(signature) = event
+                .get("delta")
+                .and_then(|d| d.get("signature"))
+                .and_then(|t| t.as_str())
+            {
+                Ok(Some(StreamingResponse {
+                    id: message_id.to_string(),
+                    object: "chat.completion.chunk".to_string(),
+                    created: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    model: "anthropic".to_string(),
+                    choices: vec![StreamingChoice {
+                        index: 0,
+                        delta: Delta {
+                            role: Some(Role::Assistant),
+                            thinking_signature: Some(signature.to_string()),
+                            ..Default::default()
+                        },
+                        finish_reason: None,
+                        logprobs: None,
+                    }],
+                    ..Default::default()
+                }))
             } else if let Some(partial_json) = event
                 .get("delta")
                 .and_then(|d| d.get("partial_json"))
@@ -196,5 +246,36 @@ pub fn interpret_anthropic_event(
             }))
         }
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn anthropic_interpreter_emits_thinking_and_signature_deltas() {
+        let mid = "msg-1";
+        let think = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "thinking_delta", "thinking": "a" }
+        });
+        let r = interpret_anthropic_event(&think, mid).unwrap().unwrap();
+        assert_eq!(
+            r.choices[0].delta.thinking.as_deref(),
+            Some("a")
+        );
+        let sig = json!({
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": { "type": "signature_delta", "signature": "sig" }
+        });
+        let r2 = interpret_anthropic_event(&sig, mid).unwrap().unwrap();
+        assert_eq!(
+            r2.choices[0].delta.thinking_signature.as_deref(),
+            Some("sig")
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::error::LlmConnectorError;
 use crate::protocols::common::capabilities::EmptyAssistantToolContentStrategy;
-use crate::types::{Message, Role};
+use crate::types::{Message, MessageBlock, Role};
 
 fn serialize_empty_assistant_tool_content(
     strategy: EmptyAssistantToolContentStrategy,
@@ -16,6 +16,55 @@ fn serialize_empty_assistant_tool_content(
 
 fn should_use_empty_assistant_tool_content_override(msg: &Message) -> bool {
     msg.role == Role::Assistant && msg.tool_calls.is_some() && msg.content.is_empty()
+}
+
+fn partition_openai_visible_blocks(content: &[MessageBlock]) -> (Vec<MessageBlock>, String) {
+    let mut thinking_agg = String::new();
+    let mut visible = Vec::new();
+    for block in content {
+        if let MessageBlock::Thinking { thinking, .. } = block {
+            if !thinking_agg.is_empty() {
+                thinking_agg.push('\n');
+            }
+            thinking_agg.push_str(thinking);
+        } else {
+            visible.push(block.clone());
+        }
+    }
+    (visible, thinking_agg)
+}
+
+fn openai_export_reasoning_content(msg: &Message, thinking_from_blocks: &str) -> Option<String> {
+    let mut out = String::new();
+    if let Some(s) = msg.reasoning_content.as_deref() {
+        if !s.is_empty() {
+            out.push_str(s);
+        }
+    } else {
+        for opt in [
+            msg.reasoning.as_deref(),
+            msg.thought.as_deref(),
+            msg.thinking.as_deref(),
+        ] {
+            if let Some(s) = opt.filter(|t| !t.is_empty()) {
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(s);
+            }
+        }
+    }
+    if !thinking_from_blocks.is_empty() {
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(thinking_from_blocks);
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Generic message converter for OpenAI-compatible protocols
@@ -40,12 +89,14 @@ pub fn openai_message_converter_with_strategy(
                 Role::Tool => "tool",
             };
 
+            let (visible, thinking_from_blocks) = partition_openai_visible_blocks(&msg.content);
+
             let content = if should_use_empty_assistant_tool_content_override(msg) {
                 serialize_empty_assistant_tool_content(empty_assistant_tool_content_strategy)
-            } else if msg.content.len() == 1 && msg.content[0].is_text() {
-                serde_json::json!(msg.content[0].as_text().unwrap())
+            } else if visible.len() == 1 && visible[0].is_text() {
+                serde_json::json!(visible[0].as_text().unwrap())
             } else {
-                serde_json::json!(msg.content)
+                serde_json::to_value(&visible).unwrap_or(serde_json::json!([]))
             };
 
             let mut map = serde_json::Map::new();
@@ -61,7 +112,7 @@ pub fn openai_message_converter_with_strategy(
             if let Some(ref name) = msg.name {
                 map.insert("name".to_string(), serde_json::json!(name));
             }
-            if let Some(ref rc) = msg.reasoning_content {
+            if let Some(rc) = openai_export_reasoning_content(msg, &thinking_from_blocks) {
                 map.insert("reasoning_content".to_string(), serde_json::json!(rc));
             }
 
@@ -94,6 +145,8 @@ pub fn openai_message_converter_downgrade_with_strategy(
                 Role::Tool => "tool",
             };
 
+            let (visible, thinking_from_blocks) = partition_openai_visible_blocks(&msg.content);
+
             // Downgrade content logic
             let content = if should_use_empty_assistant_tool_content_override(msg) {
                 match empty_assistant_tool_content_strategy {
@@ -102,22 +155,21 @@ pub fn openai_message_converter_downgrade_with_strategy(
                     | EmptyAssistantToolContentStrategy::EmptyArray => serde_json::json!(""),
                 }
             } else {
-                let content_str = if msg.content.is_empty() {
-                String::new()
-            } else {
-                let mut text_content = String::new();
-                for block in &msg.content {
-                    if let Some(text) = block.as_text() {
-                        text_content.push_str(text);
-                    } else {
-                        // Found non-text block (e.g. image), but provider only supports text
-                        return Err(LlmConnectorError::InvalidRequest(format!(
-                            "Provider does not support complex content blocks (found {:?})",
-                            block
-                        )));
+                let content_str = if visible.is_empty() && thinking_from_blocks.is_empty() {
+                    String::new()
+                } else {
+                    let mut text_content = String::new();
+                    for block in &visible {
+                        if let Some(text) = block.as_text() {
+                            text_content.push_str(text);
+                        } else {
+                            return Err(LlmConnectorError::InvalidRequest(format!(
+                                "Provider does not support complex content blocks (found {:?})",
+                                block
+                            )));
+                        }
                     }
-                }
-                text_content
+                    text_content
                 };
 
                 serde_json::json!(content_str)
@@ -136,11 +188,36 @@ pub fn openai_message_converter_downgrade_with_strategy(
             if let Some(ref name) = msg.name {
                 map.insert("name".to_string(), serde_json::json!(name));
             }
-            if let Some(ref rc) = msg.reasoning_content {
+            if let Some(rc) = openai_export_reasoning_content(msg, &thinking_from_blocks) {
                 map.insert("reasoning_content".to_string(), serde_json::json!(rc));
             }
 
             Ok(serde_json::Value::Object(map))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Message, MessageBlock, Role};
+
+    #[test]
+    fn openai_converter_moves_thinking_blocks_to_reasoning_content() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![
+                MessageBlock::thinking_unsigned("internal"),
+                MessageBlock::text("hello"),
+            ],
+            ..Default::default()
+        }];
+        let out = openai_message_converter_with_strategy(
+            &messages,
+            EmptyAssistantToolContentStrategy::Null,
+        );
+        let m = out[0].as_object().unwrap();
+        assert_eq!(m["reasoning_content"], "internal");
+        assert_eq!(m["content"], "hello");
+    }
 }
