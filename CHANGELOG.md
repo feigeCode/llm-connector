@@ -1,3 +1,13 @@
+## [1.4.0] - 2026-05-07
+
+### Fixes
+
+- **OpenAI-compatible request conversion**: `openai_message_converter_with_strategy()` now correctly converts `MessageBlock::Image` (Anthropic format) to `{"type":"image_url","image_url":...}` instead of serializing the raw Anthropic shape `{"type":"image","source":...}`. This fixes request failures with strict OpenAI-compatible providers (e.g. xiaomi). Added `block_to_openai_value()` and `blocks_to_openai_content()` helpers in `src/protocols/common/request.rs`.
+
+### Documentation
+
+- Fixed markdown formatting in `docs/ANTHROPIC_THINKING_SIGNATURE.md`.
+
 ## [1.3.0] - 2026-05-03
 
 ### Breaking
