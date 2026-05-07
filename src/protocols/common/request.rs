@@ -2,7 +2,9 @@
 
 use crate::error::LlmConnectorError;
 use crate::protocols::common::capabilities::EmptyAssistantToolContentStrategy;
-use crate::types::{Message, MessageBlock, Role};
+use crate::types::{
+    DocumentSource, ImageSource, Message, MessageBlock, Role,
+};
 
 fn serialize_empty_assistant_tool_content(
     strategy: EmptyAssistantToolContentStrategy,
@@ -67,6 +69,57 @@ fn openai_export_reasoning_content(msg: &Message, thinking_from_blocks: &str) ->
     }
 }
 
+/// Convert a single [`MessageBlock`] to an OpenAI-compatible JSON value.
+///
+/// - `Text` and `ImageUrl` variants are already in OpenAI format and are
+///   serialized directly.
+/// - `Image` (Anthropic format) is converted to `{"type":"image_url",
+///   "image_url":{"url":"data:...;base64,..."}}`.
+/// - `Document` / `DocumentUrl` are not supported by the OpenAI Chat
+///   Completions API; they are represented as text placeholders.
+/// - `Thinking` blocks must be partitioned out by the caller before calling
+///   this function.
+fn block_to_openai_value(block: &MessageBlock) -> serde_json::Value {
+    match block {
+        MessageBlock::Text { .. } | MessageBlock::ImageUrl { .. } => {
+            serde_json::to_value(block)
+                .expect("MessageBlock serialization is infallible")
+        }
+        MessageBlock::Image { source } => match source {
+            ImageSource::Base64 { media_type, data } => serde_json::json!({
+                "type": "image_url",
+                "image_url": {
+                    "url": format!("data:{};base64,{}", media_type, data)
+                }
+            }),
+            ImageSource::Url { url } => serde_json::json!({
+                "type": "image_url",
+                "image_url": { "url": url }
+            }),
+        },
+        MessageBlock::Document { source } => match source {
+            DocumentSource::Base64 { media_type, data } => serde_json::json!({
+                "type": "text",
+                "text": format!("[Document: {} (base64, {} chars)]", media_type, data.len())
+            }),
+        },
+        MessageBlock::DocumentUrl { document_url } => serde_json::json!({
+            "type": "text",
+            "text": format!("[Document: {}]", document_url.url)
+        }),
+        MessageBlock::Thinking { .. } => {
+            // Caller must partition Thinking blocks out before calling this.
+            // Return Null as a defensive fallback.
+            serde_json::Value::Null
+        }
+    }
+}
+
+/// Convert a slice of [`MessageBlock`] to an OpenAI-compatible content array.
+fn blocks_to_openai_content(blocks: &[MessageBlock]) -> Vec<serde_json::Value> {
+    blocks.iter().map(block_to_openai_value).collect()
+}
+
 /// Generic message converter for OpenAI-compatible protocols
 pub fn openai_message_converter(messages: &[Message]) -> Vec<serde_json::Value> {
     openai_message_converter_with_strategy(
@@ -96,7 +149,7 @@ pub fn openai_message_converter_with_strategy(
             } else if visible.len() == 1 && visible[0].is_text() {
                 serde_json::json!(visible[0].as_text().unwrap())
             } else {
-                serde_json::to_value(&visible).unwrap_or(serde_json::json!([]))
+                serde_json::json!(blocks_to_openai_content(&visible))
             };
 
             let mut map = serde_json::Map::new();
@@ -219,5 +272,71 @@ mod tests {
         let m = out[0].as_object().unwrap();
         assert_eq!(m["reasoning_content"], "internal");
         assert_eq!(m["content"], "hello");
+    }
+
+    #[test]
+    fn block_to_openai_value_text() {
+        let block = MessageBlock::text("hello");
+        let v = block_to_openai_value(&block);
+        assert_eq!(v["type"], "text");
+        assert_eq!(v["text"], "hello");
+    }
+
+    #[test]
+    fn block_to_openai_value_image_base64() {
+        let block = MessageBlock::image_base64("image/png", "abc");
+        let v = block_to_openai_value(&block);
+        assert_eq!(v["type"], "image_url");
+        let url = v["image_url"]["url"].as_str().unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(url.ends_with("abc"));
+    }
+
+    #[test]
+    fn block_to_openai_value_image_url() {
+        let block = MessageBlock::image_url("https://example.com/x.jpg");
+        let v = block_to_openai_value(&block);
+        assert_eq!(v["type"], "image_url");
+        assert_eq!(v["image_url"]["url"], "https://example.com/x.jpg");
+    }
+
+    #[test]
+    fn block_to_openai_value_document_base64() {
+        let block = MessageBlock::document_base64("application/pdf", "deadbeef");
+        let v = block_to_openai_value(&block);
+        assert_eq!(v["type"], "text");
+        let text = v["text"].as_str().unwrap();
+        assert!(text.contains("application/pdf"));
+    }
+
+    #[test]
+    fn block_to_openai_value_document_url() {
+        let block = MessageBlock::document_url("https://example.com/a.pdf");
+        let v = block_to_openai_value(&block);
+        assert_eq!(v["type"], "text");
+        let text = v["text"].as_str().unwrap();
+        assert!(text.contains("https://example.com/a.pdf"));
+    }
+
+    #[test]
+    fn converter_produces_openai_format_for_image_block() {
+        // Regression: Image (Anthropic format) must be converted to
+        // OpenAI image_url format, not serialized as Anthropic "image".
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![
+                MessageBlock::text("Look:"),
+                MessageBlock::image_base64("image/jpeg", "dGVzdA=="),
+            ],
+            ..Default::default()
+        }];
+        let out = openai_message_converter(&messages);
+        let content = out[0]["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[1]["type"], "image_url");
+        // Must NOT contain Anthropic "image" type
+        let types: Vec<&str> = content.iter().filter_map(|v| v["type"].as_str()).collect();
+        assert!(!types.contains(&"image"));
     }
 }
