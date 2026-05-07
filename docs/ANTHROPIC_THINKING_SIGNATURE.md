@@ -40,7 +40,7 @@ Anthropic `content_block_delta` carries an **`index`** field: which assistant `c
 
 In `interpret_anthropic_event`, for text / thinking / signature deltas, the mapped `StreamingResponse` uses `StreamingChoice { index: 0, ... }` for the OpenAI-style **choice** slot; that is **not** the Anthropic block index. Tool `partial_json` paths **do** copy the event `index` onto `ToolCall.index`.
 
-**Therefore:** either parse **raw** Anthropic SSE JSON and read `index` on every `content_block_delta`, or wrap the interpreter so every emitted chunk carries the source event’s `index` (and ideally `delta.type`). Without the Anthropic block `index`, you cannot reconstruct interleaved blocks (e.g. text block 0, thinking block 1, text block 2).
+**Therefore:** either parse **raw** Anthropic SSE JSON and read `index` on every `content_block_delta`, or wrap the interpreter so every emitted chunk carries the source event's `index` (and ideally `delta.type`). Without the Anthropic block `index`, you cannot reconstruct interleaved blocks (e.g. text block 0, thinking block 1, text block 2).
 
 ### 2. Stateful aggregation per block index
 
@@ -53,10 +53,9 @@ Recommended state machine (aligned with Anthropic streaming):
    - `text_delta`: append `delta.text` to a text buffer for this `index`.
    - `input_json_delta` / `partial_json` (tool): accumulate tool JSON per `index` as you already do for tools.
 3. **`content_block_stop`** (and/or `message_stop`, per Anthropic rules): **finalize** slot `index`:
-   - `thinking` → `MessageBlock::Thinking { thinking: concatenated_deltas, signature: Some(...) }` if the API delivered a signature; otherwise `None` only on **degraded** paths (never a fake “continuation” signature).
+   - `thinking` → `MessageBlock::Thinking { thinking: concatenated_deltas, signature: Some(...) }` if the API delivered a signature; otherwise `None` only on **degraded** paths (never a fake "continuation" signature).
    - `text` → `MessageBlock::Text { ... }`.
    - `tool_use` → map to your internal model; see ordering caveat below.
-
 4. After the stream finishes: build assistant **`Message.content`** as blocks sorted by **`index` ascending** (0, 1, 2, …).
 
 `Delta.thinking` and `Delta.thinking_signature` on each chunk are **pieces** of this picture; they are not themselves a full block until merged using the steps above.
@@ -70,7 +69,7 @@ When the stored assistant `Message` is later sent via **`AnthropicProtocol::buil
 
 So a **native** Anthropic order like `thinking → tool_use → text` cannot always be reproduced exactly from the unified model today. **Integrator mitigations:**
 
-- If your traffic is “tools always after” text/thinking, you may be fine.
+- If your traffic is "tools always after" text/thinking, you may be fine.
 - For strict Anthropic ↔ Anthropic replay, you may need to keep **provider-native** assistant JSON for that leg, or extend llm-connector later with ordered `tool_use` blocks / explicit ordering metadata.
 
 ### 4. Non-streaming vs streaming
@@ -90,7 +89,7 @@ So a **native** Anthropic order like `thinking → tool_use → text` cannot alw
 ## Acceptance
 
 - Non-streaming: Anthropic JSON with `thinking` + `signature` + `text` parses into `MessageBlock::Thinking` + text; `build_request` reproduces the same `thinking` and `signature`.
-- Streaming: `thinking_delta` / `signature_delta` yield `Delta` fields; **final** signed blocks are the integrator’s responsibility (see above).
+- Streaming: `thinking_delta` / `signature_delta` yield `Delta` fields; **final** signed blocks are the integrator's responsibility (see above).
 - No placeholder Anthropic signatures in llm-connector core types or Anthropic adapter request building.
 
 ## Related
